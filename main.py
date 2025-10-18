@@ -28,11 +28,15 @@ ALLOWED_ORIGINS = [
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=ALLOWED_ORIGINS,
+    allow_origins=[
+        "https://santosh559.github.io",
+        "https://santosh559.github.io/news-research-chatbot",
+    ],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
 
 # --- OpenAI client ---
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
