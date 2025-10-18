@@ -11,59 +11,41 @@ from fastapi.responses import JSONResponse
 from openai import OpenAI
 from dotenv import load_dotenv
 
-# load .env sitting next to this file (for local runs)
 load_dotenv(dotenv_path=Path(__file__).with_name(".env"))
 
 app = FastAPI(title="News Research Chatbot", version="0.4")
 
-# --- CORS: allow local dev + your GitHub Pages origin ---
+# CORS: allow local dev + GitHub Pages
 ALLOWED_ORIGINS = [
-    # local dev ports you use
     "http://localhost:3000", "http://127.0.0.1:3000",
     "http://localhost:3002", "http://127.0.0.1:3002",
     "http://localhost:3003", "http://127.0.0.1:3003",
-    # GitHub Pages (origin is domain only; path doesn’t matter)
     "https://santosh559.github.io",
 ]
-
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "https://santosh559.github.io",
-        "https://santosh559.github.io/news-research-chatbot",
-    ],
+    allow_origins=ALLOWED_ORIGINS,
+    allow_origin_regex=r"https://santosh559\.github\.io.*",
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-
-# --- OpenAI client ---
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
-if OPENAI_API_KEY:
-    client = OpenAI(api_key=OPENAI_API_KEY)
-else:
-    # still create the object; we will hard fail on /chat if missing
-    client = OpenAI()  # reads env var if later provided
+client = OpenAI(api_key=OPENAI_API_KEY) if OPENAI_API_KEY else OpenAI()
 
 HEADERS = {"User-Agent": "Mozilla/5.0 (compatible; NewsResearchBot/0.4)"}
 
 # --- simple in-memory cache ---
 _CACHE = {}
-TTL = 600  # seconds
-
+TTL = 600
 def cache_get(k):
     v = _CACHE.get(k)
-    if not v:
-        return None
+    if not v: return None
     data, ts = v
-    if time.time() - ts > TTL:
-        _CACHE.pop(k, None)
-        return None
+    if time.time() - ts > TTL: _CACHE.pop(k, None); return None
     return data
-
-def cache_set(k, data):
-    _CACHE[k] = (data, time.time())
+def cache_set(k, data): _CACHE[k] = (data, time.time())
 
 # --- news fetchers ---
 def fetch_news_google_rss(query: str, num: int = 4, lang="en-IN", region="IN"):
@@ -114,6 +96,7 @@ def fetch_news(query: str, num: int = 4):
 def scrape_text(url: str, max_chars: int = 800):
     try:
         r = requests.get(url, headers=HEADERS, timeout=6)
+        r.raise_for_status()
         soup = BeautifulSoup(r.text, "html.parser")
         text = " ".join(p.get_text(" ", strip=True) for p in soup.find_all("p"))
         return (text or "")[:max_chars]
@@ -126,10 +109,8 @@ def parallel_snippets(urls, max_workers=6):
         futs = {ex.submit(scrape_text, u): u for u in urls}
         for fut in as_completed(futs):
             u = futs[fut]
-            try:
-                out[u] = fut.result()
-            except Exception:
-                out[u] = ""
+            try: out[u] = fut.result()
+            except Exception: out[u] = ""
     return out
 
 # --- routes ---
@@ -139,14 +120,12 @@ def health():
 
 @app.get("/chat")
 def chat(query: str = Query(..., description="User question about news incident")):
-    # hard fail early if key missing (useful on Render)
     if not os.getenv("OPENAI_API_KEY"):
         raise HTTPException(status_code=500, detail="OPENAI_API_KEY missing in backend environment")
 
     key = f"q:{query}"
     cached = cache_get(key)
-    if cached:
-        return JSONResponse(content=cached)
+    if cached: return JSONResponse(content=cached)
 
     articles = fetch_news(query, num=4)
     if not articles:
@@ -154,10 +133,11 @@ def chat(query: str = Query(..., description="User question about news incident"
 
     urls = [a["url"] for a in articles]
     snippets = parallel_snippets(urls)
+
     docs = []
     for a in articles:
         docs.append(
-            f"Source: {a['source']}\nTitle: {a['title']}\nURL: {a['url']}\nText: {snippets.get(a['url',''])}"
+            f"Source: {a['source']}\nTitle: {a['title']}\nURL: {a['url']}\nText: {snippets.get(a['url'], '')}"
         )
 
     system = (
@@ -168,22 +148,17 @@ def chat(query: str = Query(..., description="User question about news incident"
 
     completion = client.chat.completions.create(
         model="gpt-4o-mini",
-        messages=[
-            {"role": "system", "content": system},
-            {"role": "user", "content": "\n\n".join(docs)},
-        ],
-        response_format={"type": "json_object"},
+        messages=[{"role":"system","content":system},{"role":"user","content":"\n\n".join(docs)}],
+        response_format={"type":"json_object"},
         temperature=0.2,
     )
 
     try:
         payload = json.loads(completion.choices[0].message.content)
     except Exception:
-        payload = {
-            "answer": completion.choices[0].message.content,
-            "highlights": [],
-            "sources": [f"{a['source']}: {a['url']}" for a in articles],
-        }
+        payload = {"answer": completion.choices[0].message.content,
+                   "highlights": [],
+                   "sources": [f"{a['source']}: {a['url']}" for a in articles]}
 
     cache_set(key, payload)
     return JSONResponse(content=payload)
