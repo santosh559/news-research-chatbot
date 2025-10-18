@@ -11,7 +11,8 @@
 <textarea id="q">Chandrayaan 3 updates</textarea><br><button id="ask">Ask</button>
 <h3>Response</h3><pre id="out">...</pre>
 <script>
-  const BACKEND = "YOUR_BACKEND_URL"; // <-- paste your Render URL here
+  const BACKEND = "https://news-research-chatbot.onrender.com";
+
   document.getElementById('ask').onclick = async () => {
     const out = document.getElementById('out'); out.textContent = "Loading...";
     try {
